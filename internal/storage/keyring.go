@@ -1,5 +1,3 @@
-//lint:file-ignore U1000 Some code in this file is used later
-
 package storage
 
 import (
@@ -62,11 +60,44 @@ func (keyring *Keyring) ActiveVersion() string {
 }
 
 func (keyring *Keyring) Encrypt(plaintext []byte) (string, error) {
-	return string(plaintext), nil
+	configuredKeyring, err := requireKeyring(keyring)
+	if err != nil {
+		return "", err
+	}
+	key, exists := configuredKeyring.keys[configuredKeyring.activeVersion]
+	if !exists {
+		return "", errors.New("the keyring does not contain its active encryption key")
+	}
+	payload, err := encrypt(plaintext, key, configuredKeyring.randomSource)
+	if err != nil {
+		return "", err
+	}
+	return serializeEncryptedPayload(versionedEncryptedPayload{
+		KeyVersion: configuredKeyring.activeVersion,
+		Nonce:      payload.Nonce,
+		AuthTag:    payload.AuthTag,
+		Ciphertext: payload.Ciphertext,
+	})
 }
 
 func (keyring *Keyring) Decrypt(serialized string) ([]byte, error) {
-	return []byte(serialized), nil
+	configuredKeyring, err := requireKeyring(keyring)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := deserializeEncryptedPayload(serialized)
+	if err != nil {
+		return nil, err
+	}
+	key, exists := configuredKeyring.keys[payload.KeyVersion]
+	if !exists {
+		return nil, fmt.Errorf("unknown encryption key version: %s", payload.KeyVersion)
+	}
+	return Decrypt(EncryptedPayload{
+		Nonce:      payload.Nonce,
+		AuthTag:    payload.AuthTag,
+		Ciphertext: payload.Ciphertext,
+	}, key)
 }
 
 func requireKeyring(keyring *Keyring) (*Keyring, error) {
