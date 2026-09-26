@@ -108,9 +108,26 @@ func recoverPanics(logger *logging.Logger, renderer *templates.Renderer) middlew
 	}
 }
 
-func LoadShedder(_ int, _ int) func(http.Handler) http.Handler {
+func LoadShedder(maxConcurrent, retryAfterSeconds int) func(http.Handler) http.Handler {
+	if maxConcurrent <= 0 {
+		panic("in-flight limit must be positive")
+	}
+	if retryAfterSeconds <= 0 {
+		panic("retry delay must be positive")
+	}
+	capacity := make(chan struct{}, maxConcurrent)
 	return func(next http.Handler) http.Handler {
-		return next
+		return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+			responseWriter.Header().Set("X-In-Flight-Limit", strconv.Itoa(maxConcurrent))
+			select {
+			case capacity <- struct{}{}:
+				defer func() { <-capacity }()
+				next.ServeHTTP(responseWriter, request)
+			default:
+				responseWriter.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+				httpx.RespondWithError(responseWriter, http.StatusServiceUnavailable, "Service is at capacity")
+			}
+		})
 	}
 }
 
